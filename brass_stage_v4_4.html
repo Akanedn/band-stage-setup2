@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>吹奏楽セッティング自動配置 v4.4</title>
+<style>
+  body{font-family:system-ui,-apple-system,"Hiragino Kaku Gothic ProN","Helvetica Neue",Arial;margin:0;background:#fff;color:#111}
+  header{background:#2b6cb0;color:#fff;padding:10px 14px}
+  header h1{margin:0;font-size:16px}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px}
+  .controls label{font-weight:600}
+  .controls input[type="number"]{width:70px;padding:6px;border:1px solid #d9dfe7;border-radius:6px}
+  .btn{padding:8px 12px;border-radius:8px;border:0;background:#2b6cb0;color:#fff;cursor:pointer;font-size:14px}
+  /* 横スクロール（iOS/Safari/HTML Viewer Q 対応） */
+  #stageWrap{padding:10px;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;width:100%;max-width:100vw;border-top:1px solid #e5e7eb}
+  #stage{display:block;position:relative;background:#fff;border:1px solid #cbd5e0;touch-action:none}
+  #stageInner{position:relative;display:block}
+  .node{position:absolute;width:40px;height:40px;border-radius:50%;background:#4CAF50;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;user-select:none;transition:box-shadow .1s}
+  .node.dragging{opacity:.85;box-shadow:0 6px 14px rgba(0,0,0,.18)}
+  .cond{background:#f39c12}
+  .note{padding:6px 12px;font-size:12px;color:#444}
+</style>
+</head>
+<body>
+<header><h1>吹奏楽セッティング自動配置 v4.4</h1></header>
+
+<div class="controls">
+  <label>幅[m] <input id="stageW" type="number" value="12" step="0.5"></label>
+  <label>奥行[m] <input id="stageH" type="number" value="8" step="0.5"></label>
+
+  <label>Fl <input id="Flute" type="number" value="5" min="0"></label>
+  <label>Cl <input id="Clarinet" type="number" value="9" min="0"></label>
+  <label>Sax <input id="Saxophone" type="number" value="8" min="0"></label>
+  <label>Hr <input id="Horn" type="number" value="6" min="0"></label>
+  <label>Euph <input id="Euphonium" type="number" value="5" min="0"></label>
+  <label>Tp <input id="Trumpet" type="number" value="3" min="0"></label>
+  <label>Tb <input id="Trombone" type="number" value="3" min="0"></label>
+  <label>Tuba <input id="Tuba" type="number" value="3" min="0"></label>
+  <label>Perc <input id="Percussion" type="number" value="6" min="0"></label>
+
+  <button class="btn" id="arrBtn">🎵 自動配置</button>
+  <button class="btn" id="pngBtn">📸 PNG出力</button>
+  <span class="note">※ 丸はドラッグで移動できます。背景のタップでは移動しません。</span>
+</div>
+
+<div id="stageWrap">
+  <div id="stage"><div id="stageInner"></div></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script>
+const PX_PER_M = 100;
+const V_GAP_M = 0.8;       // 列間（縦）
+const MIN_GAP_M = 0.5;     // 最小アーク間隔（m）
+const BRASS_GAP_M = 0.6;   // 金管・打楽器の横間隔（m）
+const MAX_W_M = 25, MAX_H_M = 15;
+
+const stage = document.getElementById('stage');
+const inner = document.getElementById('stageInner');
+let dragging = null;
+
+// m→px
+const m2px = m => Math.round(m * PX_PER_M);
+
+function clearStage(){ inner.innerHTML=''; }
+function setStageSize(wm, hm){
+  const wpx = m2px(wm), hpx = m2px(hm);
+  stage.style.width = wpx + 'px';
+  stage.style.height = hpx + 'px';
+  inner.style.width = wpx + 'px';
+  inner.style.height = hpx + 'px';
+  stage.style.minWidth = wpx + 'px'; // 横スクロール確実化
+}
+
+function makeDraggable(el){
+  el.addEventListener('pointerdown', (e)=>{
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    el.classList.add('dragging');
+    const rect = stage.getBoundingClientRect();
+    dragging = { el, id:e.pointerId, offsetX:e.clientX - rect.left - el.offsetLeft, offsetY:e.clientY - rect.top - el.offsetTop };
+  });
+}
+document.addEventListener('pointermove', (e)=>{
+  if(!dragging || e.pointerId !== dragging.id) return;
+  const rect = stage.getBoundingClientRect();
+  const nx = Math.max(0, Math.min(stage.clientWidth-40, e.clientX - rect.left - dragging.offsetX));
+  const ny = Math.max(0, Math.min(stage.clientHeight-40, e.clientY - rect.top  - dragging.offsetY));
+  dragging.el.style.left = nx + 'px';
+  dragging.el.style.top  = ny + 'px';
+});
+document.addEventListener('pointerup', (e)=>{
+  if(!dragging || e.pointerId !== dragging.id) return;
+  try{ dragging.el.releasePointerCapture(e.pointerId);}catch(_){}
+  dragging = null;
+  const el = e.target.closest('.node'); if(el) el.classList.remove('dragging');
+});
+
+function addNode(x, y, label, cond=false){
+  const n = document.createElement('div');
+  n.className = 'node' + (cond?' cond':'');
+  n.style.left = (x-20)+'px';
+  n.style.top  = (y-20)+'px';
+  n.textContent = label;
+  inner.appendChild(n);
+  makeDraggable(n);
+}
+
+// 同心円の下向き円弧を配置（角度 ±θ）
+// a ∈ [-θ, +θ], x = cx + R*sin(a), y = cy + R*cos(a) で中央が最も前（下）に
+function placeConcentricDownArc(cx, cy, count, radiusM, label, thetaMinDeg=35, thetaMaxDeg=80){
+  if(count<=0) return;
+  const R = radiusM;
+  // 最低間隔（弧長/(n+1) >= MIN_GAP_M）を満たす θ を計算
+  const thetaNeeded = (MIN_GAP_M*(count+1))/(2*R); // [rad]
+  let theta = Math.max(thetaMinDeg*Math.PI/180, Math.min(thetaMaxDeg*Math.PI/180, thetaNeeded));
+  // 点を端に寄せ過ぎないように、両端1つ分をオフセット
+  for(let i=0;i<count;i++){
+    const t = (i+1)/(count+1);  // 0..1
+    const a = -theta + t*(2*theta); // [-θ, +θ]
+    const x = cx + m2px(R) * Math.sin(a);
+    const y = cy + m2px(R) * Math.cos(a);
+    addNode(x, y, label);
+  }
+}
+
+function arrange(){
+  clearStage();
+  let Wm = parseFloat(stageW.value) || 12;
+  let Hm = parseFloat(stageH.value) || 8;
+
+  const c = {
+    Flute:+Flute.value, Clarinet:+Clarinet.value, Saxophone:+Saxophone.value,
+    Horn:+Horn.value, Euphonium:+Euphonium.value,
+    Trumpet:+Trumpet.value, Trombone:+Trombone.value,
+    Tuba:+Tuba.value, Percussion:+Percussion.value
+  };
+
+  // おおよその必要幅・高さを見積もって拡張
+  const maxRow = Math.max(c.Flute,c.Clarinet,c.Saxophone,c.Horn,c.Euphonium,c.Trumpet,c.Trombone,c.Percussion);
+  const reqW = Math.max(10, maxRow*0.6 + 6); // 余白を多めに
+  const reqH = 8.5;
+  let expanded=false;
+  if(Wm<reqW || Hm<reqH){
+    Wm = Math.min(MAX_W_M, Math.max(Wm, reqW));
+    Hm = Math.min(MAX_H_M, Math.max(Hm, reqH));
+    expanded=true;
+  }
+  if(reqW>MAX_W_M || reqH>MAX_H_M){
+    alert(`⚠ 最大ステージ（${MAX_W_M}m×${MAX_H_M}m）でも収まりません。`);
+    return;
+  }
+  setStageSize(Wm, Hm);
+
+  const wpx = m2px(Wm),  hpx = m2px(Hm);
+  const cx  = wpx/2;
+  const frontMargin = m2px(0.9);
+  const condY = hpx - frontMargin - m2px(0.4);
+
+  // 円の中心（木管の同心円中心）は指揮者の少し上におく
+  const arcCenterY = condY - m2px(0.8); // 指揮者から0.8m奥を中心基準に
+
+  // 指揮者
+  addNode(cx, condY, 'Cond', true);
+
+  // 木管（同心円・下向き円弧）半径（m）：Fl=3.5, Cl=4.5, Sax=5.5
+  placeConcentricDownArc(cx, arcCenterY, c.Flute,     3.5, 'Fl');
+  placeConcentricDownArc(cx, arcCenterY, c.Clarinet,  4.5, 'Cl');
+  placeConcentricDownArc(cx, arcCenterY, c.Saxophone, 5.5, 'Sax');
+
+  // Horn / Euphonium（木管のさらに奥）: 木管最大半径の頂点より奥へ
+  const heY = arcCenterY - m2px(5.5 + 1.0); // 1.0m 奥に
+  const heGap = m2px(BRASS_GAP_M);
+  const heTotal = c.Horn + c.Euphonium;
+  if(heTotal>0){
+    const start = cx - ((heTotal-1)*heGap)/2;
+    let k=0;
+    for(let i=0;i<c.Horn;i++) addNode(start + (k++)*heGap, heY, 'Hr');
+    for(let i=0;i<c.Euphonium;i++) addNode(start + (k++)*heGap, heY, 'Euph');
+  }
+
+  // Trumpet / Trombone（さらに奥）
+  const ttY = heY - m2px(1.0);
+  const ttTotal = c.Trumpet + c.Trombone;
+  if(ttTotal>0){
+    const start = cx - ((ttTotal-1)*heGap)/2;
+    let k=0;
+    for(let i=0;i<c.Trumpet;i++) addNode(start + (k++)*heGap, ttY, 'Tp');
+    for(let i=0;i<c.Trombone;i++) addNode(start + (k++)*heGap, ttY, 'Tb');
+  }
+
+  // Tuba（右側縦）— 金管列より内側に被らないように間隔確保
+  if(c.Tuba>0){
+    const tx = wpx - m2px(1.2);
+    const ty0 = heY - m2px(0.2);
+    for(let i=0;i<c.Tuba;i++) addNode(tx, ty0 - i*m2px(0.8), 'Tuba');
+  }
+
+  // Perc（最奥・上部中央）
+  if(c.Percussion>0){
+    const py = m2px(1.1);
+    const start = cx - ((c.Percussion-1)*heGap)/2;
+    for(let i=0;i<c.Percussion;i++) addNode(start + i*heGap, py, 'Perc');
+  }
+
+  if(expanded) alert(`ℹ ステージを自動拡張しました：${Wm}m × ${Hm}m`);
+}
+
+// PNG保存（ダウンロード / 互換フォールバック）
+async function exportPNG(){
+  const btn=document.getElementById('pngBtn');
+  btn.disabled=true; btn.textContent='🎨 出力中…';
+  try{
+    const canvas = await html2canvas(stage, {scale:2, useCORS:true});
+    const blob   = await new Promise(res => canvas.toBlob(res, 'image/png'));
+    const url    = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'stage_layout.png';
+    if (typeof a.download === 'string') {
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1200);
+    } else {
+      const win = window.open('', '_blank');
+      if(win){
+        win.document.write('<title>Stage PNG</title><style>body{margin:0}</style>');
+        win.document.write('<img src="'+url+'" style="max-width:100%;height:auto;display:block;margin:0 auto;" />');
+        win.document.close();
+      } else {
+        alert('ポップアップがブロックされています。許可後に再実行してください。');
+      }
+    }
+  }catch(e){
+    alert('PNG出力中にエラー: ' + e.message);
+  }finally{
+    btn.disabled=false; btn.textContent='📸 PNG出力';
+  }
+}
+
+document.getElementById('arrBtn').addEventListener('click', arrange);
+document.getElementById('pngBtn').addEventListener('click', exportPNG);
+arrange();
+</script>
+</body>
+</html>
